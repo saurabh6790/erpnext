@@ -57,6 +57,9 @@ class PurchaseInvoice(BuyingController):
 		self.validate_multiple_billing("Purchase Receipt", "pr_detail", "amount",
 			"items")
 		self.create_remarks()
+		
+		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
+		make_packing_list(self)
 
 	def create_remarks(self):
 		if not self.remarks:

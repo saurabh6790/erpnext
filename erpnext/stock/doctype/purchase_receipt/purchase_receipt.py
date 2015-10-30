@@ -75,6 +75,9 @@ class PurchaseReceipt(BuyingController):
 		self.create_raw_materials_supplied("supplied_items")
 		self.set_landed_cost_voucher_amount()
 		self.update_valuation_rate("items")
+		
+		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
+		make_packing_list(self)
 
 
 	def set_landed_cost_voucher_amount(self):

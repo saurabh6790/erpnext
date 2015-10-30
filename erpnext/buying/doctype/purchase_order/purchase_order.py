@@ -48,6 +48,9 @@ class PurchaseOrder(BuyingController):
 		self.validate_for_subcontracting()
 		self.validate_minimum_order_qty()
 		self.create_raw_materials_supplied("supplied_items")
+		
+		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
+		make_packing_list(self)
 
 	def validate_with_previous_doc(self):
 		super(PurchaseOrder, self).validate_with_previous_doc({
