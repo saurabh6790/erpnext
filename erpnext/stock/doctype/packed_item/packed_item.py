@@ -27,7 +27,23 @@ def get_bin_qty(item, warehouse):
 		where item_code = %s and warehouse = %s""", (item, warehouse), as_dict = 1)
 	return det and det[0] or frappe._dict()
 
-def update_packing_list_item(doc, packing_item_code, qty, main_item_row):
+def make_packing_list(doc):
+	"""make packing list for Product Bundle item"""
+
+	if doc.get("_action") and doc._action == "update_after_submit": return
+
+	parent_items = []
+	for d in doc.get("items"):
+		if frappe.db.get_value("Product Bundle", {"new_item_code": d.item_code}):
+			for i in get_product_bundle_items(d.item_code):
+				update_packing_list_item(doc, i.item_code, i.qty, d)
+
+			if [d.item_code, d.name] not in parent_items:
+				parent_items.append([d.item_code, d.name])
+
+	cleanup_packing_list(doc, parent_items)
+	
+def update_packing_list_item(doc, packing_item_code, qty_per_unit, main_item_row):
 	bin = get_bin_qty(packing_item_code, main_item_row.warehouse)
 	item = get_packing_item_details(packing_item_code)
 
@@ -47,7 +63,7 @@ def update_packing_list_item(doc, packing_item_code, qty, main_item_row):
 	pi.parent_detail_docname = main_item_row.name
 	pi.description = item.description
 	pi.uom = item.stock_uom
-	pi.qty = flt(qty)
+	pi.qty = flt(qty_per_unit) * flt(main_item_row.qty) * flt(main_item_row.get("conversion_factor", 1))
 	pi.actual_qty = flt(bin.get("actual_qty"))
 	pi.projected_qty = flt(bin.get("projected_qty"))
 	if not pi.warehouse:
@@ -56,22 +72,11 @@ def update_packing_list_item(doc, packing_item_code, qty, main_item_row):
 		pi.batch_no = cstr(main_item_row.get("batch_no"))
 	if not pi.target_warehouse:
 		pi.target_warehouse = main_item_row.get("target_warehouse")
-
-def make_packing_list(doc):
-	"""make packing list for Product Bundle item"""
-
-	if doc.get("_action") and doc._action == "update_after_submit": return
-
-	parent_items = []
-	for d in doc.get("items"):
-		if frappe.db.get_value("Product Bundle", {"new_item_code": d.item_code}):
-			for i in get_product_bundle_items(d.item_code):
-				update_packing_list_item(doc, i.item_code, flt(i.qty)*flt(d.qty), d)
-
-			if [d.item_code, d.name] not in parent_items:
-				parent_items.append([d.item_code, d.name])
-
-	cleanup_packing_list(doc, parent_items)
+	if main_item_row.rejected_qty and not pi.rejected_qty:
+		pi.rejected_qty = main_item_row.rejected_qty * flt(qty_per_unit) * flt(main_item_row.get("conversion_factor", 1))
+		
+	# set rate in company currency
+	pi.base_rate = flt(flt(d.rate) * doc.exchange_rate, doc.precision("base_rate"))
 
 def cleanup_packing_list(doc, parent_items):
 	"""Remove all those child items which are no longer present in main item table"""

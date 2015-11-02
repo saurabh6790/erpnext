@@ -12,6 +12,8 @@ from erpnext.controllers.recurring_document import convert_to_recurring, validat
 from erpnext.controllers.sales_and_purchase_return import validate_return
 from erpnext.accounts.party import get_party_account_currency
 from erpnext.exceptions import CustomerFrozen, InvalidCurrency
+from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
+
 
 force_item_fields = ("item_group", "barcode", "brand", "stock_uom")
 
@@ -50,6 +52,13 @@ class AccountsController(TransactionBase):
 
 		self.validate_party()
 		self.validate_currency()
+		
+		# Make Packing List
+		if self.meta.get_field("packed_items"):
+			if self.doctype == "Sales Invoice" and not cint(self.update_stock):
+				self.set("packed_items", [])
+			else:
+				make_packing_list(self)
 
 	def on_submit(self):
 		if self.meta.get_field("is_recurring"):
@@ -436,6 +445,10 @@ class AccountsController(TransactionBase):
 						.format(party_type, party, party_account_currency), InvalidCurrency)
 
 				# Note: not validating with gle account because we don't have the account at quotation / sales order level and we shouldn't stop someone from creating a sales invoice if sales order is already created
+				
+	def has_product_bundle(self, item_code):
+		return frappe.db.sql("""select name from `tabProduct Bundle`
+			where new_item_code=%s and docstatus != 2""", item_code)
 
 @frappe.whitelist()
 def get_tax_rate(account_head):

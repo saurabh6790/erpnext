@@ -31,6 +31,7 @@ class BuyingController(StockController):
 		self.set_qty_as_per_stock_uom()
 		self.validate_stock_or_nonstock_items()
 		self.validate_warehouse()
+		self.validate_product_bundle()
 
 	def set_missing_values(self, for_validate=False):
 		super(BuyingController, self).set_missing_values(for_validate)
@@ -60,6 +61,41 @@ class BuyingController(StockController):
 
 		for w in warehouses:
 			validate_warehouse_company(w, self.company)
+			
+	def validate_product_bundle(self):
+		for d in self.get("items"):
+			if self.has_product_bundle(d.item_code):
+				self.validate_product_bundle_rate(d)
+				self.validate_rejected_qty(d)
+
+	def validate_product_bundle_rate(self, row):
+		packed_items_cost = 0
+		for p in self.get("packed_items"):
+			if p.parent_detail_docname == row.name:
+				packed_items_cost += flt(p.rate)
+				
+		if row.rate != packed_items_cost:
+			frappe.throw(_("Row #{0}: Rate for bundled item must be same as total cost of packed items")
+				.format(row.idx))
+				
+	def validate_rejected_qty(self, row):
+		for p in self.get("packed_items"):
+			if p.rejected_qty > p.qty:
+				frappe.throw(_("Packed Item Row #{0}: Rejected Qty can not be greate than Qty").format(p.idx))
+				
+			if p.parent_detail_docname == row.name:
+				if row.rejected_qty and not p.rejected_qty:
+					frappe.throw(_("Packed Item Row #{0}: Mention Rejected Qty for item {1}")
+						.format(p.idx, p.item_code))
+				
+				if p.rejected_qty and not row.rejected_qty:
+					frappe.throw(_("Row #{0}: Mention Rejected Qty for item {1}").format(row.idx, row.item_code))
+					
+				qty_per_bundle = p.qty / (row.qty * row.conversion_factor)
+				if flt(p.rejected_qty, p.precision("rejected_qty")) != \
+					flt(row.rejected_qty * qty_per_bundle, row.precision("rejected_qty")):
+						frappe.throw(_("Packed Item Row #{0}: Rejected Qty must be proportionate with bundle item rejected qty")
+							.format(p.idx))
 
 	def validate_stock_or_nonstock_items(self):
 		if self.meta.get_field("taxes") and not self.get_stock_items():

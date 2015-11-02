@@ -49,9 +49,6 @@ class PurchaseOrder(BuyingController):
 		self.validate_minimum_order_qty()
 		self.create_raw_materials_supplied("supplied_items")
 		
-		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
-		make_packing_list(self)
-
 	def validate_with_previous_doc(self):
 		super(PurchaseOrder, self).validate_with_previous_doc({
 			"Supplier Quotation": {
@@ -133,19 +130,6 @@ class PurchaseOrder(BuyingController):
 
 				mr_obj.update_requested_qty(mr_item_rows)
 
-	def update_ordered_qty(self, po_item_rows=None):
-		"""update requested qty (before ordered_qty is updated)"""
-		item_wh_list = []
-		for d in self.get("items"):
-			if (not po_item_rows or d.name in po_item_rows) and [d.item_code, d.warehouse] not in item_wh_list \
-					and frappe.db.get_value("Item", d.item_code, "is_stock_item") and d.warehouse:
-				item_wh_list.append([d.item_code, d.warehouse])
-
-		for item_code, warehouse in item_wh_list:
-			update_bin_qty(item_code, warehouse, {
-				"ordered_qty": get_ordered_qty(item_code, warehouse)
-			})
-
 	def check_modified_date(self):
 		mod_db = frappe.db.sql("select modified from `tabPurchase Order` where name = %s",
 			self.name)
@@ -159,7 +143,7 @@ class PurchaseOrder(BuyingController):
 		self.check_modified_date()
 		self.set_status(update=True, status=status)
 		self.update_requested_qty()
-		self.update_ordered_qty()
+		self.update_reserved_or_ordered_qty()
 		self.notify_update()
 		clear_doctype_notifications(self)
 
@@ -173,7 +157,7 @@ class PurchaseOrder(BuyingController):
 
 		self.update_prevdoc_status()
 		self.update_requested_qty()
-		self.update_ordered_qty()
+		self.update_reserved_or_ordered_qty()
 
 		frappe.get_doc('Authorization Control').validate_approving_authority(self.doctype,
 			self.company, self.base_grand_total)
@@ -204,7 +188,7 @@ class PurchaseOrder(BuyingController):
 
 		# Must be called after updating ordered qty in Material Request
 		self.update_requested_qty()
-		self.update_ordered_qty()
+		self.update_reserved_or_ordered_qty()
 
 		pc_obj.update_last_purchase_rate(self, is_submit = 0)
 

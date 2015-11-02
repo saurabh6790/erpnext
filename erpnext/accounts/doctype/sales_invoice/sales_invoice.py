@@ -76,7 +76,6 @@ class SalesInvoice(SellingController):
 		self.validate_c_form()
 		self.validate_time_logs_are_submitted()
 		self.validate_multiple_billing("Delivery Note", "dn_detail", "amount", "items")
-		self.update_packing_list()
 
 	def on_submit(self):
 		super(SalesInvoice, self).on_submit()
@@ -418,14 +417,6 @@ class SalesInvoice(SellingController):
 			bin = frappe.db.sql("select actual_qty, projected_qty from `tabBin` where item_code =	%s and warehouse = %s", (d.item_code, d.warehouse), as_dict = 1)
 			d.actual_qty = bin and flt(bin[0]['actual_qty']) or 0
 			d.projected_qty = bin and flt(bin[0]['projected_qty']) or 0
-
-	def update_packing_list(self):
-		if cint(self.update_stock) == 1:
-			from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
-			make_packing_list(self)
-		else:
-			self.set('packed_items', [])
-
 
 	def get_warehouse(self):
 		user_pos_profile = frappe.db.sql("""select name, warehouse from `tabPOS Profile`

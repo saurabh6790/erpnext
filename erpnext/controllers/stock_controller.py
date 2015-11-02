@@ -230,25 +230,6 @@ class StockController(AccountsController):
 
 		return incoming_rate
 
-	def update_reserved_qty(self):
-		so_map = {}
-		for d in self.get("items"):
-			if d.so_detail:
-				if self.doctype == "Delivery Note" and d.against_sales_order:
-					so_map.setdefault(d.against_sales_order, []).append(d.so_detail)
-				elif self.doctype == "Sales Invoice" and d.sales_order and self.update_stock:
-					so_map.setdefault(d.sales_order, []).append(d.so_detail)
-
-		for so, so_item_rows in so_map.items():
-			if so and so_item_rows:
-				sales_order = frappe.get_doc("Sales Order", so)
-
-				if sales_order.status in ["Stopped", "Cancelled"]:
-					frappe.throw(_("{0} {1} is cancelled or stopped").format(_("Sales Order"), so),
-						frappe.InvalidStatusError)
-
-				sales_order.update_reserved_qty(so_item_rows)
-
 	def update_stock_ledger(self):
 		self.update_reserved_qty()
 
@@ -303,7 +284,84 @@ class StockController(AccountsController):
 						}))
 
 		self.make_sl_entries(sl_entries)
+		
+	def update_reserved_qty(self):
+		so_map = {}
+		for d in self.get("items"):
+			if d.so_detail:
+				if self.doctype == "Delivery Note" and d.against_sales_order:
+					so_map.setdefault(d.against_sales_order, []).append(d.so_detail)
+				elif self.doctype == "Sales Invoice" and d.sales_order and self.update_stock:
+					so_map.setdefault(d.sales_order, []).append(d.so_detail)
 
+		for so, so_item_rows in so_map.items():
+			if so and so_item_rows:
+				sales_order = frappe.get_doc("Sales Order", so)
+
+				if sales_order.status in ["Stopped", "Cancelled"]:
+					frappe.throw(_("{0} {1} is cancelled or stopped").format(_("Sales Order"), so),
+						frappe.InvalidStatusError)
+
+				sales_order.update_reserved_or_ordered_qty(so_item_rows)
+				
+	def update_reserved_or_ordered_qty(self, order_item_rows=None):
+		"""
+			Update reserved qty from Sales Order / Delivery Note
+			Update ordered qty from Purchase Order / Purchase Receipt
+		"""
+		
+		item_wh_list = []
+		def _valid_for_reserve(item_code, warehouse):
+			if item_code and warehouse and [item_code, warehouse] not in item_wh_list \
+				and frappe.db.get_value("Item", item_code, "is_stock_item") and warehouse:
+					item_wh_list.append([item_code, warehouse])
+
+		for d in self.get("items"):
+			if (not order_item_rows or d.name in order_item_rows):
+				_valid_for_reserve(d.item_code, d.warehouse)
+
+				if self.has_product_bundle(d.item_code):
+					for p in self.get("packed_items"):
+						if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
+							_valid_for_reserve(p.item_code, p.warehouse)
+
+		for item_code, warehouse in item_wh_list:
+			if self.doctype == "Sales Order":
+				qty_dict = { "reserved_qty": get_reserved_qty(item_code, warehouse) }
+			elif self.doctype == "Purchase Order":
+				qty_dict = { "ordered_qty": get_ordered_qty(item_code, warehouse) }
+			
+			update_bin_qty(item_code, warehouse, qty_dict)
+			
+	def get_item_list(self):
+		il = []
+		for d in self.get("items"):
+			if d.qty is None:
+				frappe.throw(_("Row {0}: Qty is mandatory").format(d.idx))
+														
+			if self.has_product_bundle(d.item_code):
+				for p in self.get("packed_items"):
+					if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
+						# the packing details table's qty is already multiplied with parent's qty
+						il.append(frappe._dict({
+							'warehouse': p.warehouse,
+							'item_code': p.item_code,
+							'qty': flt(p.qty),
+							'uom': p.uom,
+							'batch_no': cstr(p.batch_no).strip(),
+							'serial_no': cstr(p.serial_no).strip(),
+							'name': d.name,
+							'target_warehouse': p.target_warehouse,
+							'rejected_qty': p.rejected_qty,
+							'rejected_warehouse': d.rejected_warehouse,
+							'rejected_serial_no': cstr(p.rejected_serial_no).strip(),
+							'valuation_rate': flt(d.valuation_rate) * flt(p.rate) / flt(d.rate)
+						}))
+			else:
+				il.append(d)
+				
+		return il
+			
 def update_gl_entries_after(posting_date, posting_time, for_warehouses=None, for_items=None,
 		warehouse_account=None):
 	def _delete_gl_entries(voucher_type, voucher_no):

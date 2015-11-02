@@ -156,44 +156,6 @@ class SellingController(StockController):
 			if discount and flt(d.discount_percentage) > discount:
 				frappe.throw(_("Maxiumm discount for Item {0} is {1}%").format(d.item_code, discount))
 
-	def get_item_list(self):
-		il = []
-		for d in self.get("items"):
-			if d.qty is None:
-				frappe.throw(_("Row {0}: Qty is mandatory").format(d.idx))
-														
-			if self.has_product_bundle(d.item_code):
-				for p in self.get("packed_items"):
-					if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
-						# the packing details table's qty is already multiplied with parent's qty
-						il.append(frappe._dict({
-							'warehouse': p.warehouse,
-							'item_code': p.item_code,
-							'qty': flt(p.qty),
-							'uom': p.uom,
-							'batch_no': cstr(p.batch_no).strip(),
-							'serial_no': cstr(p.serial_no).strip(),
-							'name': d.name,
-							'target_warehouse': p.target_warehouse
-						}))
-			else:
-				il.append(frappe._dict({
-					'warehouse': d.warehouse,
-					'item_code': d.item_code,
-					'qty': d.qty,
-					'uom': d.stock_uom,
-					'stock_uom': d.stock_uom,
-					'batch_no': cstr(d.get("batch_no")).strip(),
-					'serial_no': cstr(d.get("serial_no")).strip(),
-					'name': d.name,
-					'target_warehouse': d.target_warehouse
-				}))
-		return il
-
-	def has_product_bundle(self, item_code):
-		return frappe.db.sql("""select name from `tabProduct Bundle`
-			where new_item_code=%s and docstatus != 2""", item_code)
-
 	def get_already_delivered_qty(self, current_docname, so, so_detail):
 		delivered_via_dn = frappe.db.sql("""select sum(qty) from `tabDelivery Note Item`
 			where so_detail = %s and docstatus = 1

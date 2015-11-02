@@ -32,10 +32,6 @@ class SalesOrder(SellingController):
 		self.validate_for_items()
 		self.validate_warehouse()
 		self.validate_drop_ship()
-
-		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
-		make_packing_list(self)
-
 		self.validate_with_previous_doc()
 		self.set_status()
 
@@ -69,7 +65,7 @@ class SalesOrder(SellingController):
 			if (frappe.db.get_value("Item", d.item_code, "is_stock_item")==1 or
 				(self.has_product_bundle(d.item_code) and self.product_bundle_has_stock_item(d.item_code))) \
 				and not d.warehouse and not cint(d.delivered_by_supplier):
-				frappe.throw(_("Delivery warehouse required for stock item {0}").format(d.item_code),
+				frappe.throw(_("Delivery warehouse required for item {0}").format(d.item_code),
 					WarehouseRequired)
 
 			# used for production plan
@@ -157,7 +153,7 @@ class SalesOrder(SellingController):
 		super(SalesOrder, self).on_submit()
 
 		self.check_credit_limit()
-		self.update_reserved_qty()
+		self.update_reserved_or_ordered_qty()
 
 		frappe.get_doc('Authorization Control').validate_approving_authority(self.doctype, self.base_grand_total, self)
 
@@ -169,7 +165,7 @@ class SalesOrder(SellingController):
 			frappe.throw(_("Stopped order cannot be cancelled. Unstop to cancel."))
 
 		self.check_nextdoc_docstatus()
-		self.update_reserved_qty()
+		self.update_reserved_or_ordered_qty()
 
 		self.update_prevdoc_status('cancel')
 
@@ -222,6 +218,7 @@ class SalesOrder(SellingController):
 
 	def update_status(self, status):
 		self.check_modified_date()
+<<<<<<< 24d8ff7122a5c55cbb25c4805c189a7fc0a675c5
 		self.set_status(update=True, status=status)
 		self.update_reserved_qty()
 		self.notify_update()
@@ -248,6 +245,19 @@ class SalesOrder(SellingController):
 			update_bin_qty(item_code, warehouse, {
 				"reserved_qty": get_reserved_qty(item_code, warehouse)
 			})
+=======
+		self.db_set('status', status)
+		self.update_reserved_or_ordered_qty()
+		self.notify_update()
+		clear_doctype_notifications(self)
+
+	def unstop_sales_order(self):
+		self.check_modified_date()
+		self.db_set('status', 'Draft')
+		self.set_status(update=True)
+		self.update_reserved_or_ordered_qty()
+		clear_doctype_notifications(self)
+>>>>>>> Make packing list
 
 	def on_update(self):
 		pass

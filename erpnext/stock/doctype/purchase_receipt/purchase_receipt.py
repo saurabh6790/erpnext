@@ -75,10 +75,6 @@ class PurchaseReceipt(BuyingController):
 		self.create_raw_materials_supplied("supplied_items")
 		self.set_landed_cost_voucher_amount()
 		self.update_valuation_rate("items")
-		
-		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
-		make_packing_list(self)
-
 
 	def set_landed_cost_voucher_amount(self):
 		for d in self.get("items"):
@@ -144,15 +140,14 @@ class PurchaseReceipt(BuyingController):
 		sl_entries = []
 		stock_items = self.get_stock_items()
 
-		for d in self.get('items'):
+		for d in self.get_item_list():
 			if d.item_code in stock_items and d.warehouse:
-				pr_qty = flt(d.qty) * flt(d.conversion_factor)
-
-				if pr_qty:
+				if flt(d.qty):
 					val_rate_db_precision = 6 if cint(self.precision("valuation_rate", d)) <= 6 else 9
 					rate = flt(d.valuation_rate, val_rate_db_precision)
+					
 					sle = self.get_sl_entries(d, {
-						"actual_qty": flt(pr_qty),
+						"actual_qty": flt(d.qty),
 						"serial_no": cstr(d.serial_no).strip()
 					})
 					if self.is_return:
@@ -168,12 +163,12 @@ class PurchaseReceipt(BuyingController):
 				if flt(d.rejected_qty) > 0:
 					sl_entries.append(self.get_sl_entries(d, {
 						"warehouse": d.rejected_warehouse,
-						"actual_qty": flt(d.rejected_qty) * flt(d.conversion_factor),
-						"serial_no": cstr(d.rejected_serial_no).strip(),
+						"actual_qty": flt(d.rejected_qty),
+						"serial_no": d.rejected_serial_no,
 						"incoming_rate": 0.0
 					}))
 
-		self.bk_flush_supp_wh(sl_entries)
+		self.back_flush_supplied_items_for_sub_contracting(sl_entries)
 		self.make_sl_entries(sl_entries, allow_negative_stock=allow_negative_stock,
 			via_landed_cost_voucher=via_landed_cost_voucher)
 
@@ -191,7 +186,7 @@ class PurchaseReceipt(BuyingController):
 					frappe.throw(_("{0} {1} is cancelled or stopped").format(_("Purchase Order"), po),
 						frappe.InvalidStatusError)
 
-				po_obj.update_ordered_qty(po_item_rows)
+				po_obj.update_reserved_or_ordered_qty(po_item_rows)
 
 	def get_already_received_qty(self, po, po_detail):
 		qty = frappe.db.sql("""select sum(qty) from `tabPurchase Receipt Item`
@@ -205,7 +200,7 @@ class PurchaseReceipt(BuyingController):
 			["qty", "warehouse"])
 		return po_qty, po_warehouse
 
-	def bk_flush_supp_wh(self, sl_entries):
+	def back_flush_supplied_items_for_sub_contracting(self, sl_entries):
 		for d in self.get('supplied_items'):
 			# negative quantity is passed as raw material qty has to be decreased
 			# when PR is submitted and it has to be increased when PR is cancelled

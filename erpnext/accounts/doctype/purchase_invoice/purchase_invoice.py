@@ -58,9 +58,6 @@ class PurchaseInvoice(BuyingController):
 			"items")
 		self.create_remarks()
 		
-		from erpnext.stock.doctype.packed_item.packed_item import make_packing_list
-		make_packing_list(self)
-
 	def create_remarks(self):
 		if not self.remarks:
 			if self.bill_no and self.bill_date:
