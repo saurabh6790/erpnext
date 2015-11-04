@@ -142,6 +142,9 @@ class PurchaseReceipt(BuyingController):
 
 		for d in self.get_item_list():
 			if d.item_code in stock_items and d.warehouse:
+				if d.get("parent_detail_docname"):
+					d.name = d.parent_detail_docname
+					
 				if flt(d.qty):
 					val_rate_db_precision = 6 if cint(self.precision("valuation_rate", d)) <= 6 else 9
 					rate = flt(d.valuation_rate, val_rate_db_precision)
@@ -304,6 +307,9 @@ class PurchaseReceipt(BuyingController):
 		
 		for d in self.get_item_list():
 			if d.item_code in stock_items and flt(d.valuation_rate) and flt(d.qty):
+				if d.get("parent_detail_docname"):
+					d.name = d.parent_detail_docname
+					
 				if warehouse_account.get(d.warehouse):
 					val_rate_db_precision = 6 if cint(d.precision("valuation_rate")) <= 6 else 9
 
@@ -314,21 +320,25 @@ class PurchaseReceipt(BuyingController):
 					self.get_gle_for_warehouse(d, stock_value_diff, stock_rbnb, warehouse_account)
 
 					# stock received but not billed
-					self.get_credit_entry(d, stock_rbnb, "base_net_amount", "net_amount", stock_rbnb_currency)					
+					self.get_credit_entry(d, stock_rbnb, "base_net_amount", "net_amount", 
+						stock_rbnb_currency, warehouse_account)
 
 					# Amount added through landed-cost-voucher
 					if flt(d.landed_cost_voucher_amount):
-						self.get_credit_entry(d, expenses_included_in_valuation, "landed_cost_voucher_amount")
+						self.get_credit_entry(d, expenses_included_in_valuation, 
+							"landed_cost_voucher_amount", warehouse_account=warehouse_account)
 						
 					# sub-contracting warehouse
 					if flt(d.rm_supp_cost) and warehouse_account.get(self.supplier_warehouse):
-						self.get_credit_entry(d, warehouse_account[self.supplier_warehouse]["name"], "rm_supp_cost", 
+						self.get_credit_entry(d, warehouse_account[self.supplier_warehouse]["name"], 
+							"rm_supp_cost",	warehouse_account=warehouse_account, 
 							account_currency=warehouse_account[self.supplier_warehouse]["account_currency"])
 							
 					negative_expense_to_be_booked += flt(d.item_tax_amount)
 
 					# divisional loss adjustment
-					self.make_gle_for_divisional_loss(d, stock_value_diff, stock_rbnb, stock_rbnb_currency)
+					self.make_gle_for_divisional_loss(d, stock_value_diff, stock_rbnb, 
+						stock_rbnb_currency, warehouse_account)
 
 				elif d.warehouse not in warehouse_with_no_account or \
 					d.rejected_warehouse not in warehouse_with_no_account:
@@ -338,16 +348,13 @@ class PurchaseReceipt(BuyingController):
 		taxes_based_on_cost_center = self.set_taxes_based_on_cost_center()
 
 		if negative_expense_to_be_booked and taxes_based_on_cost_center:
-			self.get_gle_for_valuation_related_taxes(expenses_included_in_valuation, stock_rbnb, taxes_based_on_cost_center)
+			self.get_gle_for_valuation_related_taxes(expenses_included_in_valuation, stock_rbnb, 
+				taxes_based_on_cost_center, negative_expense_to_be_booked)
 
 		if warehouse_with_no_account:
 			frappe.msgprint(_("No accounting entries for the following warehouses") + ": \n" +
 				"\n".join(warehouse_with_no_account))
 
-<<<<<<< e008d810814ef0844d0ea96514b1c888ce37c27c
-		return process_gl_map(gl_entries)
-
-=======
 		return process_gl_map(self.gl_entries)
 		
 	def get_gle_for_warehouse(self, d, amount, against_account, warehouse_account):
@@ -359,7 +366,8 @@ class PurchaseReceipt(BuyingController):
 			"debit": amount
 		}, warehouse_account[d.warehouse]["account_currency"]))
 		
-	def get_credit_entry(self, d, account, base_amount_field, amount_field=None, account_currency=None):
+	def get_credit_entry(self, d, account, base_amount_field, amount_field=None, 
+			account_currency=None, warehouse_account=None):
 		args = {
 			"account": account,
 			"against": warehouse_account[d.warehouse]["name"],
@@ -373,13 +381,14 @@ class PurchaseReceipt(BuyingController):
 		
 		self.gl_entries.append(self.get_gl_dict(args, account_currency))
 		
-	def make_gle_for_divisional_loss(self, d, stock_value_diff, account, account_currency):
+	def make_gle_for_divisional_loss(self, d, stock_value_diff, account, 
+			account_currency, warehouse_account):
 		distributed_amount = flt(flt(d.base_net_amount, self.precision("base_net_amount", d))) + \
 			flt(d.landed_cost_voucher_amount) + flt(d.rm_supp_cost) + flt(d.item_tax_amount)
 
 		divisional_loss = flt(distributed_amount - stock_value_diff, self.precision("base_net_amount", d))
 		if divisional_loss:
-			gl_entries.append(self.get_gl_dict({
+			self.gl_entries.append(self.get_gl_dict({
 				"account": account,
 				"against": warehouse_account[d.warehouse]["name"],
 				"cost_center": d.cost_center,
@@ -387,7 +396,7 @@ class PurchaseReceipt(BuyingController):
 				"debit": divisional_loss
 			}, account_currency))
 	
-	def set_taxes_based_on_cost_center():
+	def set_taxes_based_on_cost_center(self):
 		taxes_based_on_cost_center = {}
 		for tax in self.get("taxes"):
 			if tax.category in ("Valuation", "Valuation and Total") and flt(tax.base_tax_amount_after_discount_amount):
@@ -399,7 +408,7 @@ class PurchaseReceipt(BuyingController):
 					
 		return taxes_based_on_cost_center
 	
-	def get_gle_for_valuation_related_taxes(self, expenses_included_in_valuation, stock_rbnb, taxes_based_on_cost_center):
+	def get_gle_for_valuation_related_taxes(self, expenses_included_in_valuation, stock_rbnb, taxes_based_on_cost_center, negative_expense_to_be_booked):
 		# Backward compatibility:
 		# If expenses_included_in_valuation account has been credited in against PI
 		# and charges added via Landed Cost Voucher,
@@ -413,7 +422,7 @@ class PurchaseReceipt(BuyingController):
 		if negative_expense_booked_in_pi:
 			expenses_included_in_valuation = stock_rbnb
 
-		against_account = ", ".join([d.account for d in gl_entries if flt(d.debit) > 0])
+		against_account = ", ".join([d.account for d in self.gl_entries if flt(d.debit) > 0])
 		total_valuation_amount = sum(taxes_based_on_cost_center.values())
 		amount_including_divisional_loss = negative_expense_to_be_booked
 		i = 1
@@ -436,7 +445,6 @@ class PurchaseReceipt(BuyingController):
 
 			i += 1
 	
->>>>>>> [fixes] update ledger qty
 	def update_status(self, status):
 		self.set_status(update=True, status = status)
 		self.notify_update()

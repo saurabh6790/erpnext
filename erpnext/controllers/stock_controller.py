@@ -7,12 +7,34 @@ from frappe.utils import cint, flt, cstr
 from frappe import msgprint, _
 import frappe.defaults
 from erpnext.accounts.general_ledger import make_gl_entries, delete_gl_entries, process_gl_map
-from erpnext.stock.utils import get_incoming_rate
+from erpnext.stock.utils import get_incoming_rate, validate_warehouse_company
 from erpnext.stock.stock_balance import update_bin_qty, get_reserved_qty, get_ordered_qty
-
 from erpnext.controllers.accounts_controller import AccountsController
 
+class WarehouseRequired(frappe.ValidationError): pass
+
 class StockController(AccountsController):
+	def validate(self):
+		super(StockController, self).validate()
+		self.validate_warehouse()
+		
+	def validate_warehouse(self):
+		if self.doctype == "Sales Invoice" and not cint(self.update_stock):
+			return
+		
+		for d in self.get_item_list():
+			if d.doctype=="Packed Item" and self.get("__islocal"):
+				continue
+				
+			if frappe.get_meta(self.doctype + " Item").get_field("warehouse") \
+					and not d.get("delivered_by_supplier") and \
+					frappe.db.get_value("Item", d.item_code, "is_stock_item") == 1:
+				if not d.warehouse:
+					frappe.throw(_("Row #{0}: Warehouse required for stock Item {1}")
+						.format(d.idx, d.item_code), WarehouseRequired)
+				else:
+					validate_warehouse_company(d.warehouse, self.company)
+	
 	def make_gl_entries(self, repost_future_gle=True):
 		if self.docstatus == 2:
 			delete_gl_entries(voucher_type=self.doctype, voucher_no=self.name)
@@ -237,6 +259,9 @@ class StockController(AccountsController):
 		sl_entries = []
 		for d in self.get_item_list():
 			if frappe.db.get_value("Item", d.item_code, "is_stock_item") == 1 and flt(d.qty):
+				if d.get("parent_detail_docname"):
+					d.name = d.parent_detail_docname
+					
 				return_rate = 0
 				if cint(self.is_return) and self.return_against and self.docstatus==1:
 					return_rate = self.get_incoming_rate_for_sales_return(d.item_code,
@@ -344,10 +369,14 @@ class StockController(AccountsController):
 				for packed_item in self.get("packed_items"):
 					if packed_item.parent_detail_docname == d.name and packed_item.parent_item == d.item_code:
 						# the packing details table's qty is already multiplied with parent's qty
-						rate_fraction = flt(packed_item.rate) / flt(d.rate)
+						if d.rate:
+							rate_fraction = flt(packed_item.rate) / flt(d.rate)
+						else:
+							packed_item_count = frappe.db.sql("""select count(name) 
+								from `tabProduct Bundle Item` where parent=%s""", d.item_code)[0][0]
+							rate_fraction = 1/packed_item_count
 						
 						packed_item.update({
-							'name': d.name,
 							'net_amount': flt(packed_item.rate) * flt(packed_item.qty),
 							'base_net_amount': flt(packed_item.rate) * flt(packed_item.qty) * self.conversion_rate,
 							'rejected_warehouse': d.get("rejected_warehouse"),
@@ -355,35 +384,14 @@ class StockController(AccountsController):
 							'item_tax_amount': flt(d.get("item_tax_amount")) * rate_fraction,
 							'landed_cost_voucher_amount': flt(d.get("landed_cost_voucher_amount")) * rate_fraction,
 							'rm_supp_cost': flt(d.get("rm_supp_cost")) * rate_fraction
-						})
+						})	
 						
 						il.append(packed_item.as_dict())
-						
-						# il.append(frappe._dict({
-						# 	'warehouse': p.warehouse,
-						# 	'item_code': p.item_code,
-						# 	'qty': flt(p.qty),
-						# 	'uom': p.uom,
-						# 	'batch_no': cstr(p.batch_no).strip(),
-						# 	'serial_no': cstr(p.serial_no).strip(),
-						# 	'name': d.name,
-						# 	'target_warehouse': p.target_warehouse,
-						# 	'rejected_qty': p.rejected_qty,
-						# 	'rejected_warehouse': d.rejected_warehouse,
-						# 	'rejected_serial_no': cstr(p.rejected_serial_no).strip(),
-						# 	'rate': flt(p.rate),
-						# 	'base_rate': flt(p.base_rate)
-						# 	'valuation_rate': flt(d.valuation_rate) * rate_fraction,
-						# 	'item_tax_amount': flt(d.item_tax_amount) * rate_fraction,
-						# 	'landed_cost_voucher_amount': flt(d.landed_cost_voucher_amount) * rate_fraction,
-						# 	'rm_supp_cost': flt(d.rm_supp_cost) * rate_fraction
-						#
-						# }))
 			else:
 				il.append(d)
 				
 		return il
-			
+						
 def update_gl_entries_after(posting_date, posting_time, for_warehouses=None, for_items=None,
 		warehouse_account=None):
 	def _delete_gl_entries(voucher_type, voucher_no):

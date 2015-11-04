@@ -30,7 +30,6 @@ class BuyingController(StockController):
 		self.is_item_table_empty()
 		self.set_qty_as_per_stock_uom()
 		self.validate_stock_or_nonstock_items()
-		self.validate_warehouse()
 		self.validate_product_bundle()
 
 	def set_missing_values(self, for_validate=False):
@@ -52,15 +51,6 @@ class BuyingController(StockController):
 				if supplier:
 					self.supplier = supplier
 					break
-
-	def validate_warehouse(self):
-		from erpnext.stock.utils import validate_warehouse_company
-
-		warehouses = list(set([d.warehouse for d in
-			self.get("items") if getattr(d, "warehouse", None)]))
-
-		for w in warehouses:
-			validate_warehouse_company(w, self.company)
 			
 	def validate_product_bundle(self):
 		for d in self.get("items"):

@@ -110,7 +110,6 @@ class DeliveryNote(SellingController):
 		self.validate_proj_cust()
 		self.check_stop_or_close_sales_order("against_sales_order")
 		self.validate_for_items()
-		self.validate_warehouse()
 		self.validate_uom_is_integer("stock_uom", "qty")
 		self.validate_with_previous_doc()
 		self.update_current_stock()
@@ -161,13 +160,6 @@ class DeliveryNote(SellingController):
 					msgprint(_("Note: Item {0} entered multiple times").format(d.item_code))
 				else:
 					chk_dupl_itm.append(f)
-
-	def validate_warehouse(self):
-		for d in self.get_item_list():
-			if frappe.db.get_value("Item", d['item_code'], "is_stock_item") == 1:
-				if not d['warehouse']:
-					frappe.throw(_("Warehouse required for stock Item {0}").format(d["item_code"]))
-
 
 	def update_current_stock(self):
 		if self.get("_action") and self._action != "update_after_submit":

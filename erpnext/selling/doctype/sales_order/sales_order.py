@@ -16,8 +16,6 @@ form_grid_templates = {
 	"items": "templates/form_grid/item_grid.html"
 }
 
-class WarehouseRequired(frappe.ValidationError): pass
-
 class SalesOrder(SellingController):
 	def validate(self):
 		super(SalesOrder, self).validate()
@@ -28,8 +26,7 @@ class SalesOrder(SellingController):
 		self.validate_proj_cust()
 		self.validate_po()
 		self.validate_uom_is_integer("stock_uom", "qty")
-		self.validate_for_items()
-		self.validate_warehouse()
+		self.validate_items()
 		self.validate_drop_ship()
 		self.validate_with_previous_doc()
 		self.set_status()
@@ -56,17 +53,10 @@ class SalesOrder(SellingController):
 				cint(frappe.db.get_single_value("Selling Settings", "allow_against_multiple_purchase_orders")):
 				frappe.msgprint(_("Warning: Sales Order {0} already exists against Customer's Purchase Order {1}").format(so[0][0], self.po_no))
 
-	def validate_for_items(self):
+	def validate_items(self):
 		check_list = []
 		for d in self.get('items'):
 			check_list.append(cstr(d.item_code))
-
-			if (frappe.db.get_value("Item", d.item_code, "is_stock_item")==1 or
-				(self.has_product_bundle(d.item_code) and self.product_bundle_has_stock_item(d.item_code))) \
-				and not d.warehouse and not cint(d.delivered_by_supplier):
-				frappe.throw(_("Delivery warehouse required for item {0}").format(d.item_code),
-					WarehouseRequired)
-
 			# used for production plan
 			d.transaction_date = self.transaction_date
 
@@ -109,15 +99,6 @@ class SalesOrder(SellingController):
 					(self.project_name, self.customer))
 			if not res:
 				frappe.throw(_("Customer {0} does not belong to project {1}").format(self.customer, self.project_name))
-
-	def validate_warehouse(self):
-		from erpnext.stock.utils import validate_warehouse_company
-
-		warehouses = list(set([d.warehouse for d in
-			self.get("items") if d.warehouse]))
-
-		for w in warehouses:
-			validate_warehouse_company(w, self.company)
 
 	def validate_with_previous_doc(self):
 		super(SalesOrder, self).validate_with_previous_doc({
