@@ -8,6 +8,7 @@ from frappe import msgprint, _
 import frappe.defaults
 from erpnext.accounts.general_ledger import make_gl_entries, delete_gl_entries, process_gl_map
 from erpnext.stock.utils import get_incoming_rate
+from erpnext.stock.stock_balance import update_bin_qty, get_reserved_qty, get_ordered_qty
 
 from erpnext.controllers.accounts_controller import AccountsController
 
@@ -309,11 +310,11 @@ class StockController(AccountsController):
 			Update reserved qty from Sales Order / Delivery Note
 			Update ordered qty from Purchase Order / Purchase Receipt
 		"""
-		
+	
 		item_wh_list = []
 		def _valid_for_reserve(item_code, warehouse):
 			if item_code and warehouse and [item_code, warehouse] not in item_wh_list \
-				and frappe.db.get_value("Item", item_code, "is_stock_item") and warehouse:
+				and frappe.db.get_value("Item", item_code, "is_stock_item"):
 					item_wh_list.append([item_code, warehouse])
 
 		for d in self.get("items"):
@@ -324,7 +325,7 @@ class StockController(AccountsController):
 					for p in self.get("packed_items"):
 						if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
 							_valid_for_reserve(p.item_code, p.warehouse)
-
+							
 		for item_code, warehouse in item_wh_list:
 			if self.doctype == "Sales Order":
 				qty_dict = { "reserved_qty": get_reserved_qty(item_code, warehouse) }
@@ -340,23 +341,44 @@ class StockController(AccountsController):
 				frappe.throw(_("Row {0}: Qty is mandatory").format(d.idx))
 														
 			if self.has_product_bundle(d.item_code):
-				for p in self.get("packed_items"):
-					if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
+				for packed_item in self.get("packed_items"):
+					if packed_item.parent_detail_docname == d.name and packed_item.parent_item == d.item_code:
 						# the packing details table's qty is already multiplied with parent's qty
-						il.append(frappe._dict({
-							'warehouse': p.warehouse,
-							'item_code': p.item_code,
-							'qty': flt(p.qty),
-							'uom': p.uom,
-							'batch_no': cstr(p.batch_no).strip(),
-							'serial_no': cstr(p.serial_no).strip(),
+						rate_fraction = flt(packed_item.rate) / flt(d.rate)
+						
+						packed_item.update({
 							'name': d.name,
-							'target_warehouse': p.target_warehouse,
-							'rejected_qty': p.rejected_qty,
-							'rejected_warehouse': d.rejected_warehouse,
-							'rejected_serial_no': cstr(p.rejected_serial_no).strip(),
-							'valuation_rate': flt(d.valuation_rate) * flt(p.rate) / flt(d.rate)
-						}))
+							'net_amount': flt(packed_item.rate) * flt(packed_item.qty),
+							'base_net_amount': flt(packed_item.rate) * flt(packed_item.qty) * self.conversion_rate,
+							'rejected_warehouse': d.get("rejected_warehouse"),
+							'valuation_rate': flt(d.get("valuation_rate")) * rate_fraction,
+							'item_tax_amount': flt(d.get("item_tax_amount")) * rate_fraction,
+							'landed_cost_voucher_amount': flt(d.get("landed_cost_voucher_amount")) * rate_fraction,
+							'rm_supp_cost': flt(d.get("rm_supp_cost")) * rate_fraction
+						})
+						
+						il.append(packed_item.as_dict())
+						
+						# il.append(frappe._dict({
+						# 	'warehouse': p.warehouse,
+						# 	'item_code': p.item_code,
+						# 	'qty': flt(p.qty),
+						# 	'uom': p.uom,
+						# 	'batch_no': cstr(p.batch_no).strip(),
+						# 	'serial_no': cstr(p.serial_no).strip(),
+						# 	'name': d.name,
+						# 	'target_warehouse': p.target_warehouse,
+						# 	'rejected_qty': p.rejected_qty,
+						# 	'rejected_warehouse': d.rejected_warehouse,
+						# 	'rejected_serial_no': cstr(p.rejected_serial_no).strip(),
+						# 	'rate': flt(p.rate),
+						# 	'base_rate': flt(p.base_rate)
+						# 	'valuation_rate': flt(d.valuation_rate) * rate_fraction,
+						# 	'item_tax_amount': flt(d.item_tax_amount) * rate_fraction,
+						# 	'landed_cost_voucher_amount': flt(d.landed_cost_voucher_amount) * rate_fraction,
+						# 	'rm_supp_cost': flt(d.rm_supp_cost) * rate_fraction
+						#
+						# }))
 			else:
 				il.append(d)
 				

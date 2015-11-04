@@ -294,138 +294,149 @@ class PurchaseReceipt(BuyingController):
 		from erpnext.accounts.general_ledger import process_gl_map
 
 		stock_rbnb = self.get_company_default("stock_received_but_not_billed")
+		stock_rbnb_currency = get_account_currency(stock_rbnb)
 		expenses_included_in_valuation = self.get_company_default("expenses_included_in_valuation")
 
-		gl_entries = []
+		self.gl_entries = []
 		warehouse_with_no_account = []
 		negative_expense_to_be_booked = 0.0
 		stock_items = self.get_stock_items()
-		for d in self.get("items"):
+		
+		for d in self.get_item_list():
 			if d.item_code in stock_items and flt(d.valuation_rate) and flt(d.qty):
 				if warehouse_account.get(d.warehouse):
-
 					val_rate_db_precision = 6 if cint(d.precision("valuation_rate")) <= 6 else 9
 
 					# warehouse account
 					stock_value_diff = flt(flt(d.valuation_rate, val_rate_db_precision) * flt(d.qty)
-						* flt(d.conversion_factor),	d.precision("base_net_amount"))
+						* flt(d.get("conversion_factor", 1)),	d.precision("base_net_amount"))
 
-					gl_entries.append(self.get_gl_dict({
-						"account": warehouse_account[d.warehouse]["name"],
-						"against": stock_rbnb,
-						"cost_center": d.cost_center,
-						"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-						"debit": stock_value_diff
-					}, warehouse_account[d.warehouse]["account_currency"]))
+					self.get_gle_for_warehouse(d, stock_value_diff, stock_rbnb, warehouse_account)
 
 					# stock received but not billed
-					stock_rbnb_currency = get_account_currency(stock_rbnb)
-					gl_entries.append(self.get_gl_dict({
-						"account": stock_rbnb,
-						"against": warehouse_account[d.warehouse]["name"],
-						"cost_center": d.cost_center,
-						"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-						"credit": flt(d.base_net_amount, d.precision("base_net_amount")),
-						"credit_in_account_currency": flt(d.base_net_amount, d.precision("base_net_amount")) \
-							if stock_rbnb_currency==self.company_currency else flt(d.net_amount, d.precision("net_amount"))
-					}, stock_rbnb_currency))
-
-					negative_expense_to_be_booked += flt(d.item_tax_amount)
+					self.get_credit_entry(d, stock_rbnb, "base_net_amount", "net_amount", stock_rbnb_currency)					
 
 					# Amount added through landed-cost-voucher
 					if flt(d.landed_cost_voucher_amount):
-						gl_entries.append(self.get_gl_dict({
-							"account": expenses_included_in_valuation,
-							"against": warehouse_account[d.warehouse]["name"],
-							"cost_center": d.cost_center,
-							"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-							"credit": flt(d.landed_cost_voucher_amount)
-						}))
-
+						self.get_credit_entry(d, expenses_included_in_valuation, "landed_cost_voucher_amount")
+						
 					# sub-contracting warehouse
 					if flt(d.rm_supp_cost) and warehouse_account.get(self.supplier_warehouse):
-						gl_entries.append(self.get_gl_dict({
-							"account": warehouse_account[self.supplier_warehouse]["name"],
-							"against": warehouse_account[d.warehouse]["name"],
-							"cost_center": d.cost_center,
-							"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-							"credit": flt(d.rm_supp_cost)
-						}, warehouse_account[self.supplier_warehouse]["account_currency"]))
+						self.get_credit_entry(d, warehouse_account[self.supplier_warehouse]["name"], "rm_supp_cost", 
+							account_currency=warehouse_account[self.supplier_warehouse]["account_currency"])
+							
+					negative_expense_to_be_booked += flt(d.item_tax_amount)
 
 					# divisional loss adjustment
-					sle_valuation_amount = flt(flt(d.valuation_rate, val_rate_db_precision) * flt(d.qty) * flt(d.conversion_factor),
-							self.precision("base_net_amount", d))
-
-					distributed_amount = flt(flt(d.base_net_amount, self.precision("base_net_amount", d))) + \
-						flt(d.landed_cost_voucher_amount) + flt(d.rm_supp_cost) + flt(d.item_tax_amount)
-
-					divisional_loss = flt(distributed_amount - sle_valuation_amount, self.precision("base_net_amount", d))
-					if divisional_loss:
-						gl_entries.append(self.get_gl_dict({
-							"account": stock_rbnb,
-							"against": warehouse_account[d.warehouse]["name"],
-							"cost_center": d.cost_center,
-							"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-							"debit": divisional_loss
-						}, stock_rbnb_currency))
+					self.make_gle_for_divisional_loss(d, stock_value_diff, stock_rbnb, stock_rbnb_currency)
 
 				elif d.warehouse not in warehouse_with_no_account or \
 					d.rejected_warehouse not in warehouse_with_no_account:
 						warehouse_with_no_account.append(d.warehouse)
 
 		# Cost center-wise amount breakup for other charges included for valuation
-		valuation_tax = {}
-		for tax in self.get("taxes"):
-			if tax.category in ("Valuation", "Valuation and Total") and flt(tax.base_tax_amount_after_discount_amount):
-				if not tax.cost_center:
-					frappe.throw(_("Cost Center is required in row {0} in Taxes table for type {1}").format(tax.idx, _(tax.category)))
-				valuation_tax.setdefault(tax.cost_center, 0)
-				valuation_tax[tax.cost_center] += \
-					(tax.add_deduct_tax == "Add" and 1 or -1) * flt(tax.base_tax_amount_after_discount_amount)
+		taxes_based_on_cost_center = self.set_taxes_based_on_cost_center()
 
-		if negative_expense_to_be_booked and valuation_tax:
-			# Backward compatibility:
-			# If expenses_included_in_valuation account has been credited in against PI
-			# and charges added via Landed Cost Voucher,
-			# post valuation related charges on "Stock Received But Not Billed"
-
-			negative_expense_booked_in_pi = frappe.db.sql("""select name from `tabPurchase Invoice Item` pi
-				where docstatus = 1 and purchase_receipt=%s
-				and exists(select name from `tabGL Entry` where voucher_type='Purchase Invoice'
-					and voucher_no=pi.parent and account=%s)""", (self.name, expenses_included_in_valuation))
-
-			if negative_expense_booked_in_pi:
-				expenses_included_in_valuation = stock_rbnb
-
-			against_account = ", ".join([d.account for d in gl_entries if flt(d.debit) > 0])
-			total_valuation_amount = sum(valuation_tax.values())
-			amount_including_divisional_loss = negative_expense_to_be_booked
-			i = 1
-			for cost_center, amount in valuation_tax.items():
-				if i == len(valuation_tax):
-					applicable_amount = amount_including_divisional_loss
-				else:
-					applicable_amount = negative_expense_to_be_booked * (amount / total_valuation_amount)
-					amount_including_divisional_loss -= applicable_amount
-
-				gl_entries.append(
-					self.get_gl_dict({
-						"account": expenses_included_in_valuation,
-						"cost_center": cost_center,
-						"credit": applicable_amount,
-						"remarks": self.remarks or _("Accounting Entry for Stock"),
-						"against": against_account
-					})
-				)
-
-				i += 1
+		if negative_expense_to_be_booked and taxes_based_on_cost_center:
+			self.get_gle_for_valuation_related_taxes(expenses_included_in_valuation, stock_rbnb, taxes_based_on_cost_center)
 
 		if warehouse_with_no_account:
 			frappe.msgprint(_("No accounting entries for the following warehouses") + ": \n" +
 				"\n".join(warehouse_with_no_account))
 
+<<<<<<< e008d810814ef0844d0ea96514b1c888ce37c27c
 		return process_gl_map(gl_entries)
 
+=======
+		return process_gl_map(self.gl_entries)
+		
+	def get_gle_for_warehouse(self, d, amount, against_account, warehouse_account):
+		self.gl_entries.append(self.get_gl_dict({
+			"account": warehouse_account[d.warehouse]["name"],
+			"against": against_account,
+			"cost_center": d.cost_center,
+			"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
+			"debit": amount
+		}, warehouse_account[d.warehouse]["account_currency"]))
+		
+	def get_credit_entry(self, d, account, base_amount_field, amount_field=None, account_currency=None):
+		args = {
+			"account": account,
+			"against": warehouse_account[d.warehouse]["name"],
+			"cost_center": d.cost_center,
+			"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
+			"credit": flt(d.get("base_amount_field"), d.precision("base_amount_field"))
+		}
+		if account_currency and amount_field:
+			args["credit_in_account_currency"] = flt(d.get("base_amount_field"), d.precision("base_amount_field")) \
+				if account_currency==self.company_currency else flt(d.get("amount_field"), d.precision("amount_field"))
+		
+		self.gl_entries.append(self.get_gl_dict(args, account_currency))
+		
+	def make_gle_for_divisional_loss(self, d, stock_value_diff, account, account_currency):
+		distributed_amount = flt(flt(d.base_net_amount, self.precision("base_net_amount", d))) + \
+			flt(d.landed_cost_voucher_amount) + flt(d.rm_supp_cost) + flt(d.item_tax_amount)
+
+		divisional_loss = flt(distributed_amount - stock_value_diff, self.precision("base_net_amount", d))
+		if divisional_loss:
+			gl_entries.append(self.get_gl_dict({
+				"account": account,
+				"against": warehouse_account[d.warehouse]["name"],
+				"cost_center": d.cost_center,
+				"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
+				"debit": divisional_loss
+			}, account_currency))
+	
+	def set_taxes_based_on_cost_center():
+		taxes_based_on_cost_center = {}
+		for tax in self.get("taxes"):
+			if tax.category in ("Valuation", "Valuation and Total") and flt(tax.base_tax_amount_after_discount_amount):
+				if not tax.cost_center:
+					frappe.throw(_("Cost Center is required in row {0} in Taxes table for type {1}").format(tax.idx, _(tax.category)))
+				taxes_based_on_cost_center.setdefault(tax.cost_center, 0)
+				taxes_based_on_cost_center[tax.cost_center] += \
+					(tax.add_deduct_tax == "Add" and 1 or -1) * flt(tax.base_tax_amount_after_discount_amount)
+					
+		return taxes_based_on_cost_center
+	
+	def get_gle_for_valuation_related_taxes(self, expenses_included_in_valuation, stock_rbnb, taxes_based_on_cost_center):
+		# Backward compatibility:
+		# If expenses_included_in_valuation account has been credited in against PI
+		# and charges added via Landed Cost Voucher,
+		# post valuation related charges on "Stock Received But Not Billed"
+
+		negative_expense_booked_in_pi = frappe.db.sql("""select name from `tabPurchase Invoice Item` pi
+			where docstatus = 1 and purchase_receipt=%s
+			and exists(select name from `tabGL Entry` where voucher_type='Purchase Invoice'
+				and voucher_no=pi.parent and account=%s)""", (self.name, expenses_included_in_valuation))
+
+		if negative_expense_booked_in_pi:
+			expenses_included_in_valuation = stock_rbnb
+
+		against_account = ", ".join([d.account for d in gl_entries if flt(d.debit) > 0])
+		total_valuation_amount = sum(taxes_based_on_cost_center.values())
+		amount_including_divisional_loss = negative_expense_to_be_booked
+		i = 1
+		for cost_center, amount in taxes_based_on_cost_center.items():
+			if i == len(taxes_based_on_cost_center):
+				applicable_amount = amount_including_divisional_loss
+			else:
+				applicable_amount = negative_expense_to_be_booked * (amount / total_valuation_amount)
+				amount_including_divisional_loss -= applicable_amount
+
+			self.gl_entries.append(
+				self.get_gl_dict({
+					"account": expenses_included_in_valuation,
+					"cost_center": cost_center,
+					"credit": applicable_amount,
+					"remarks": self.remarks or _("Accounting Entry for Stock"),
+					"against": against_account
+				})
+			)
+
+			i += 1
+	
+>>>>>>> [fixes] update ledger qty
 	def update_status(self, status):
 		self.set_status(update=True, status = status)
 		self.notify_update()

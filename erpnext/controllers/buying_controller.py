@@ -66,16 +66,17 @@ class BuyingController(StockController):
 		for d in self.get("items"):
 			if self.has_product_bundle(d.item_code):
 				self.validate_product_bundle_rate(d)
-				self.validate_rejected_qty(d)
+				if self.doctype == "Purchase Receipt":
+					self.validate_rejected_qty(d)
 
 	def validate_product_bundle_rate(self, row):
 		packed_items_cost = 0
 		for p in self.get("packed_items"):
 			if p.parent_detail_docname == row.name:
 				packed_items_cost += flt(p.rate)
-				
-		if row.rate != packed_items_cost:
-			frappe.throw(_("Row #{0}: Rate for bundled item must be same as total cost of packed items")
+		
+		if not self.get("__islocal") and row.net_rate != packed_items_cost:
+			frappe.throw(_("Row #{0}: Net Rate for bundled item must be same as total cost of packed items")
 				.format(row.idx))
 				
 	def validate_rejected_qty(self, row):

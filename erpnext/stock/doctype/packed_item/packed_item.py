@@ -72,11 +72,11 @@ def update_packing_list_item(doc, packing_item_code, qty_per_unit, main_item_row
 		pi.batch_no = cstr(main_item_row.get("batch_no"))
 	if not pi.target_warehouse:
 		pi.target_warehouse = main_item_row.get("target_warehouse")
-	if main_item_row.rejected_qty and not pi.rejected_qty:
+	if main_item_row.get("rejected_qty") and not pi.rejected_qty:
 		pi.rejected_qty = main_item_row.rejected_qty * flt(qty_per_unit) * flt(main_item_row.get("conversion_factor", 1))
 		
 	# set rate in company currency
-	pi.base_rate = flt(flt(d.rate) * doc.exchange_rate, doc.precision("base_rate"))
+	pi.base_rate = flt(flt(pi.rate) * doc.conversion_rate, pi.precision("base_rate"))
 
 def cleanup_packing_list(doc, parent_items):
 	"""Remove all those child items which are no longer present in main item table"""

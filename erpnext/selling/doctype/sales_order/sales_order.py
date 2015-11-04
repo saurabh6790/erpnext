@@ -8,7 +8,6 @@ import frappe.utils
 from frappe.utils import cstr, flt, getdate, comma_and, cint
 from frappe import _
 from frappe.model.mapper import get_mapped_doc
-from erpnext.stock.stock_balance import update_bin_qty, get_reserved_qty
 from frappe.desk.notifications import clear_doctype_notifications
 
 from erpnext.controllers.selling_controller import SellingController
@@ -218,46 +217,10 @@ class SalesOrder(SellingController):
 
 	def update_status(self, status):
 		self.check_modified_date()
-<<<<<<< 24d8ff7122a5c55cbb25c4805c189a7fc0a675c5
 		self.set_status(update=True, status=status)
-		self.update_reserved_qty()
-		self.notify_update()
-		clear_doctype_notifications(self)
-
-	def update_reserved_qty(self, so_item_rows=None):
-		"""update requested qty (before ordered_qty is updated)"""
-		item_wh_list = []
-		def _valid_for_reserve(item_code, warehouse):
-			if item_code and warehouse and [item_code, warehouse] not in item_wh_list \
-				and frappe.db.get_value("Item", item_code, "is_stock_item"):
-					item_wh_list.append([item_code, warehouse])
-
-		for d in self.get("items"):
-			if (not so_item_rows or d.name in so_item_rows):
-				_valid_for_reserve(d.item_code, d.warehouse)
-
-				if self.has_product_bundle(d.item_code):
-					for p in self.get("packed_items"):
-						if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
-							_valid_for_reserve(p.item_code, p.warehouse)
-
-		for item_code, warehouse in item_wh_list:
-			update_bin_qty(item_code, warehouse, {
-				"reserved_qty": get_reserved_qty(item_code, warehouse)
-			})
-=======
-		self.db_set('status', status)
 		self.update_reserved_or_ordered_qty()
 		self.notify_update()
 		clear_doctype_notifications(self)
-
-	def unstop_sales_order(self):
-		self.check_modified_date()
-		self.db_set('status', 'Draft')
-		self.set_status(update=True)
-		self.update_reserved_or_ordered_qty()
-		clear_doctype_notifications(self)
->>>>>>> Make packing list
 
 	def on_update(self):
 		pass

@@ -9,7 +9,6 @@ from frappe import msgprint, _, throw
 from frappe.model.mapper import get_mapped_doc
 from erpnext.controllers.buying_controller import BuyingController
 from erpnext.stock.doctype.item.item import get_last_purchase_details
-from erpnext.stock.stock_balance import update_bin_qty, get_ordered_qty
 from frappe.desk.notifications import clear_doctype_notifications
 
 
@@ -48,7 +47,14 @@ class PurchaseOrder(BuyingController):
 		self.validate_for_subcontracting()
 		self.validate_minimum_order_qty()
 		self.create_raw_materials_supplied("supplied_items")
-		
+		self.validate_warehouse()
+	
+	def validate_warehouse(self):
+		for d in self.get_item_list():
+			if frappe.db.get_value("Item", d['item_code'], "is_stock_item") == 1:
+				if not d['warehouse']:
+					frappe.throw(_("Warehouse required for stock Item {0}").format(d["item_code"]))
+	
 	def validate_with_previous_doc(self):
 		super(PurchaseOrder, self).validate_with_previous_doc({
 			"Supplier Quotation": {
