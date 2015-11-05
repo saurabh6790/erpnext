@@ -118,11 +118,43 @@ def get_indented_qty(item_code, warehouse):
 
 def get_ordered_qty(item_code, warehouse):
 	ordered_qty = frappe.db.sql("""
-		select sum((po_item.qty - ifnull(po_item.received_qty, 0))*po_item.conversion_factor)
-		from `tabPurchase Order Item` po_item, `tabPurchase Order` po
-		where po_item.item_code=%s and po_item.warehouse=%s
-		and po_item.qty > ifnull(po_item.received_qty, 0) and po_item.parent=po.name
-		and po.status not in ('Stopped', 'Closed', 'Delivered') and po.docstatus=1""", (item_code, warehouse))
+		select
+			sum((packed_item_qty / po_item_qty) * (po_item_qty - po_item_received_qty))
+		from
+			(
+				(select
+					qty as packed_item_qty,
+					(
+						select qty from `tabPurchase Order Item`
+						where name = packed_item.parent_detail_docname
+					) as po_item_qty,
+					(
+						select ifnull(received_qty, 0) from `tabPurchase Order Item`
+						where name = packed_item.parent_detail_docname
+					) as po_item_received_qty,
+					parent, name
+				from
+				(
+					select qty, parent_detail_docname, parent, name
+					from `tabPacked Item` dnpi_in
+					where item_code = %s and warehouse = %s
+					and parenttype="Purchase Order"
+					and item_code != parent_item
+					and exists (select * from `tabPurchase Order` po
+					where name = dnpi_in.parent and docstatus = 1 and status not in ('Stopped','Closed'))
+				) packed_item)
+			union
+				(select qty as packed_item_qty, qty as po_item_qty,
+					ifnull(received_qty, 0) as po_item_received_qty, parent, name
+				from `tabPurchase Order Item` po_item
+				where item_code = %s and warehouse = %s
+				and exists(select * from `tabPurchase Order` po
+					where po.name = po_item.parent and po.docstatus = 1
+					and po.status not in ('Stopped','Closed')))
+			) tab
+		where
+			po_item_qty >= po_item_received_qty
+	""", (item_code, warehouse, item_code, warehouse))
 
 	return flt(ordered_qty[0][0]) if ordered_qty else 0
 

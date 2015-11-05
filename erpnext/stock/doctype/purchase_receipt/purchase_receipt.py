@@ -138,15 +138,14 @@ class PurchaseReceipt(BuyingController):
 
 	def update_stock_ledger(self, allow_negative_stock=False, via_landed_cost_voucher=False):
 		sl_entries = []
-		stock_items = self.get_stock_items()
-
+		
 		for d in self.get_item_list():
-			if d.item_code in stock_items and d.warehouse:
+			if frappe.db.get_value("Item", d.item_code, "is_stock_item") == 1 and d.warehouse:
 				if d.get("parent_detail_docname"):
 					d.name = d.parent_detail_docname
 					
 				if flt(d.qty):
-					val_rate_db_precision = 6 if cint(self.precision("valuation_rate", d)) <= 6 else 9
+					val_rate_db_precision = 6 if cint(self.precision("rate", d)) <= 6 else 9
 					rate = flt(d.valuation_rate, val_rate_db_precision)
 					
 					sle = self.get_sl_entries(d, {
