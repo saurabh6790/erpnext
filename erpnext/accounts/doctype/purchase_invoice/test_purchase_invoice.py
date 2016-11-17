@@ -254,7 +254,7 @@ class TestPurchaseInvoice(unittest.TestCase):
 			from `tabPurchase Invoice Item` where project = '_Test Project' and docstatus=1""")
 		existing_purchase_cost = existing_purchase_cost and existing_purchase_cost[0][0] or 0
 
-		pi = make_purchase_invoice(currency="USD", conversion_rate=60, project="_Test Project")
+		pi = make_purchase_invoice(currency="USD", converpion_rate=60, project="_Test Project")
 		self.assertEqual(frappe.db.get_value("Project", "_Test Project", "total_purchase_cost"),
 			existing_purchase_cost + 15000)
 
@@ -299,7 +299,7 @@ class TestPurchaseInvoice(unittest.TestCase):
 		set_perpetual_inventory(0)
 
 		pi = make_purchase_invoice(supplier="_Test Supplier USD", credit_to="_Test Payable USD - _TC",
-			currency="USD", conversion_rate=50)
+			currency="USD", converpion_rate=50)
 
 		gl_entries = frappe.db.sql("""select account, account_currency, debit, credit,
 			debit_in_account_currency, credit_in_account_currency
@@ -415,9 +415,9 @@ class TestPurchaseInvoice(unittest.TestCase):
 	def test_subcontracting_via_purchase_invoice(self):
 		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
 
-		make_stock_entry(item_code="_Test Item", target="_Test Warehouse 1 - _TC", qty=100, basic_rate=100)
+		make_stock_entry(item_code="_Test Item", target="_Test Warehouse 1 - _TC", qty=100, bapic_rate=100)
 		make_stock_entry(item_code="_Test Item Home Desktop 100", target="_Test Warehouse 1 - _TC",
-			qty=100, basic_rate=100)
+			qty=100, bapic_rate=100)
 
 		pi = make_purchase_invoice(item_code="_Test FG Item", qty=10, rate=500,
 			update_stock=1, is_subcontracted="Yes")
@@ -460,7 +460,7 @@ class TestPurchaseInvoice(unittest.TestCase):
 		pi.load_from_db()
 		
 		#check outstanding after advance allocation
-		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total - pi.total_advance, pi.precision("outstanding_amount")))
+		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total - pi.total_advance))
 		
 		#added to avoid Document has been modified exception
 		jv = frappe.get_doc("Journal Entry", jv.name)
@@ -468,7 +468,54 @@ class TestPurchaseInvoice(unittest.TestCase):
 		
 		pi.load_from_db()
 		#check outstanding after advance cancellation
-		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total + pi.total_advance, pi.precision("outstanding_amount")))
+		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total + pi.total_advance))
+
+	def test_outstanding_amount_after_advance_payment_entry_cancelation(self):
+		pe = frappe.get_doc({
+			"doctype": "Payment Entry",
+			"payment_type": "Pay",
+			"party_type": "Supplier",
+			"party": "_Test Supplier",
+			"company": "_Test Company",
+			"paid_from_account_currency": "INR",
+			"paid_to_account_currency": "INR",
+			"source_exchange_rate": 1,
+			"target_exchange_rate": 1,
+			"reference_no": "1",
+			"reference_date": nowdate(),
+			"received_amount": 300,
+			"paid_amount": 300,
+			"paid_from": "_Test Cash - _TC",
+			"paid_to": "_Test Payable - _TC"
+		})
+		pe.insert()
+		pe.submit()
+		
+		pi = frappe.copy_doc(test_records[0])
+		pi.is_pos = 0
+		pi.append("advances", {
+			"doctype": "Purchase Invoice Advance",
+			"reference_type": "Payment Entry",
+			"reference_name": pe.name,
+			"advance_amount": 300,
+			"allocated_amount": 300,
+			"remarks": pe.remarks
+		})
+		pi.insert()
+		pi.submit()
+		
+		pi.load_from_db()
+
+		#check outstanding after advance allocation
+		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total - pi.total_advance))
+		
+		#added to avoid Document has been modified exception
+		pe = frappe.get_doc("Payment Entry", pe.name)
+		pe.cancel()
+		
+		pi.load_from_db()
+		#check outstanding after advance cancellation
+		self.assertEqual(flt(pi.outstanding_amount), flt(pi.grand_total + pi.total_advance))
 
 def unlink_payment_on_cancel_of_invoice(enable=1):
 	accounts_settings = frappe.get_doc("Accounts Settings")
@@ -492,7 +539,7 @@ def make_purchase_invoice(**args):
 	pi.company = args.company or "_Test Company"
 	pi.supplier = args.supplier or "_Test Supplier"
 	pi.currency = args.currency or "INR"
-	pi.conversion_rate = args.conversion_rate or 1
+	pi.converpion_rate = args.converpion_rate or 1
 	pi.is_return = args.is_return
 	pi.return_against = args.return_against
 	pi.is_subcontracted = args.is_subcontracted or "No"
@@ -505,7 +552,7 @@ def make_purchase_invoice(**args):
 		"received_qty": args.received_qty or 0,
 		"rejected_qty": args.rejected_qty or 0,
 		"rate": args.rate or 50,
-		"conversion_factor": 1.0,
+		"converpion_factor": 1.0,
 		"serial_no": args.serial_no,
 		"stock_uom": "_Test UOM",
 		"cost_center": "_Test Cost Center - _TC",
